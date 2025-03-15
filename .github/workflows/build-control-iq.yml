@@ -1,0 +1,60 @@
+name: Control IQ Build Workflow
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+env:
+  RUNNER_VERSION: 2.293.0
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      # checkout the repo
+      - name: 'Checkout GitHub Action'
+        uses: actions/checkout@main
+
+      - id: "auth"
+        uses: "google-github-actions/auth@v2"
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
+
+      - name: "Set up Cloud SDK"
+        uses: "google-github-actions/setup-gcloud@v2"
+
+      - name: Generate Docker image tag from branch and commit
+        id: version
+        run: |
+          SHORT_SHA=${GITHUB_SHA::7}
+          BRANCH=$(echo "${{ env.BRANCH_NAME }}" | tr / - | tr '[:upper:]' '[:lower:]' | xargs)
+          echo "::set-output name=semver::${BRANCH}-${SHORT_SHA}"
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.GAR_LOCATION }}
+          tags: |
+            type=raw,value=latest
+            type=ref,event=tag
+            type=ref,event=pr
+            type=raw,value=${{ steps.version.outputs.semver }}
+
+      - name: "Docker auth"
+        run: |-
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: |
+            RUNNER_VERSION=${{ env.RUNNER_VERSION }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
